@@ -232,9 +232,11 @@ export class ChubExtension extends Extension<InitStateType, ChatStateType, Messa
         };
 
         for (const scene in world) {
-            this.generator.makeImage({prompt: world[scene].imagePrompt}).then(resp => {
-                this.chatState.image[scene] = resp != null && resp.url != null ? resp.url : '';
-            });
+            if(this.chatState.image[scene] == null) {
+                this.generator.makeImage({prompt: world[scene].imagePrompt}).then(resp => {
+                    this.chatState.image[scene] = resp != null && resp.url != null ? resp.url : '';
+                });
+            }
         }
 
         return world;
@@ -373,8 +375,7 @@ export class ChubExtension extends Extension<InitStateType, ChatStateType, Messa
                 alt="Scene"
                 style={{
                     maxWidth: '100%', maxHeight: '50%', objectFit: 'contain',
-
-                    opacity: '30%'
+                    opacity: '100%'
                 }}
             />
         </>;
