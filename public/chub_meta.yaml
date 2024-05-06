@@ -86,3 +86,6 @@ permissions:
 
 github_path: 'https://github.com/townaie/go'
 
+
+extension_id: 'go-0fca4b303698'
+
