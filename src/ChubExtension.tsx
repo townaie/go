@@ -1,7 +1,6 @@
 import {ReactElement} from "react";
 import {Extension, ExtensionResponse, InitialData, Message} from "chub-extensions-ts";
 import {LoadResponse} from "chub-extensions-ts/dist/types/load";
-import {GenerationService} from "chub-extensions-ts/dist/types/generation/service";
 import {ImagineResponse} from "chub-extensions-ts/dist/types/generation/images";
 type MessageStateType = {
     currentScene: string,
@@ -27,14 +26,18 @@ type InitStateType = {
             puzzles: { [key: string]: { description: string, requiredItem: string, rewardScene: string } }
         }}
 };
-type ChatStateType = null;
+type ChatStateType = {
+    image: { [key: string] : string | undefined }
+};
 export class ChubExtension extends Extension<InitStateType, ChatStateType, MessageStateType, ConfigType> {
     myInternalState: MessageStateType;
     config: ConfigType
     initState: InitStateType['world'] | null
+    chatState: ChatStateType
     constructor(data: InitialData<InitStateType, ChatStateType, MessageStateType, ConfigType>) {
         super(data);
-        const {config, initState, messageState} = data;
+        const {config, initState, messageState, chatState} = data;
+        this.chatState = chatState != null ? chatState : {image: {}};
         this.config = config != null ? config : {startingHealth: 100, startingHunger: 0, maxDays: 365};
         this.initState = initState != null ? initState['world'] : null;
         this.myInternalState = messageState != null ? messageState : {
@@ -109,7 +112,7 @@ export class ChubExtension extends Extension<InitStateType, ChatStateType, Messa
             modifiedMessage,
             systemMessage,
             error: null,
-            chatState: null
+            chatState: this.chatState
         };
     }
 
@@ -136,7 +139,7 @@ export class ChubExtension extends Extension<InitStateType, ChatStateType, Messa
             modifiedMessage: null,
             error: null,
             systemMessage,
-            chatState: null
+            chatState: this.chatState
         };
     }
 
@@ -229,8 +232,9 @@ export class ChubExtension extends Extension<InitStateType, ChatStateType, Messa
         };
 
         for (const scene in world) {
-            const resp = await this.generator.makeImage({prompt: world[scene].imagePrompt});
-            if (resp?.url) world[scene].imagePrompt = resp.url;
+            this.generator.makeImage({prompt: world[scene].imagePrompt}).then(resp => {
+                this.chatState.image[scene] = resp != null && resp.url != null ? resp.url : '';
+            });
         }
 
         return world;
@@ -365,7 +369,7 @@ export class ChubExtension extends Extension<InitStateType, ChatStateType, Messa
                 {this.myInternalState.song != null && <audio src={this.myInternalState.song}/>}
             </div>
             <img
-                src={this.initState![this.myInternalState.currentScene].imagePrompt}
+                src={this.chatState.image[this.myInternalState.currentScene]}
                 alt="Scene"
                 style={{
                     maxWidth: '100%', maxHeight: '50%', objectFit: 'contain',
