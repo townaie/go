@@ -232,7 +232,7 @@ export class ChubExtension extends Extension<InitStateType, ChatStateType, Messa
         };
 
         for (const scene in world) {
-            if(this.chatState.image[scene] == null) {
+            if(this.chatState.image[scene] == null || this.chatState.image[scene] == '') {
                 this.generator.makeImage({prompt: world[scene].imagePrompt}).then(resp => {
                     this.chatState.image[scene] = resp != null && resp.url != null ? resp.url : '';
                 });
