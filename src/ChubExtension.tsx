@@ -1,205 +1,378 @@
 import {ReactElement} from "react";
 import {Extension, ExtensionResponse, InitialData, Message} from "chub-extensions-ts";
 import {LoadResponse} from "chub-extensions-ts/dist/types/load";
-
-/***
- The type that this extension persists message-level state in.
- This is primarily for readability, and not enforced.
-
- @description This type is saved in the database after each message,
-  which makes it ideal for storing things like positions and statuses,
-  but not for things like history, which is best managed ephemerally
-  in the internal state of the ChubExtension class itself.
- ***/
-type MessageStateType = any;
-
-/***
- The type of the extension-specific configuration of this extension.
-
- @description This is for things you want people to be able to configure,
-  like background color.
- ***/
-type ConfigType = any;
-
-/***
- The type that this extension persists chat initialization state in.
- If there is any 'constant once initialized' static state unique to a chat,
- like procedurally generated terrain that is only created ONCE and ONLY ONCE per chat,
- it belongs here.
- ***/
-type InitStateType = any;
-
-/***
- The type that this extension persists dynamic chat-level state in.
- This is for any state information unique to a chat,
-    that applies to ALL branches and paths such as clearing fog-of-war.
- It is usually unlikely you will need this, and if it is used for message-level
-    data like player health then it will enter an inconsistent state whenever
-    they change branches or jump nodes. Use MessageStateType for that.
- ***/
-type ChatStateType = any;
-
-/***
- A simple example class that implements the interfaces necessary for an Extension.
- If you want to rename it, be sure to modify App.js as well.
- @link https://github.com/CharHubAI/chub-extensions-ts/blob/main/src/types/extension.ts
- ***/
+import {GenerationService} from "chub-extensions-ts/dist/types/generation/service";
+import {ImagineResponse} from "chub-extensions-ts/dist/types/generation/images";
+type MessageStateType = {
+    currentScene: string,
+    inventory: string[],
+    health: number,
+    hunger: number,
+    day: number,
+    gameOver: boolean,
+    song?: string | null
+};
+type ConfigType = {
+    startingHealth: number,
+    startingHunger: number,
+    maxDays: number
+};
+type InitStateType = {
+    world: { [scene: string]: {
+            description: string,
+            imagePrompt: string,
+            connectedScenes: string[],
+            items: string[],
+            enemies: string[],
+            puzzles: { [key: string]: { description: string, requiredItem: string, rewardScene: string } }
+        }}
+};
+type ChatStateType = null;
 export class ChubExtension extends Extension<InitStateType, ChatStateType, MessageStateType, ConfigType> {
-
-    /***
-     A very simple example internal state. Can be anything.
-     This is ephemeral in the sense that it isn't persisted to a database,
-     but exists as long as the instance does, i.e., the chat page is open.
-     ***/
-    myInternalState: {[key: string]: any};
-
+    myInternalState: MessageStateType;
+    config: ConfigType
+    initState: InitStateType['world'] | null
     constructor(data: InitialData<InitStateType, ChatStateType, MessageStateType, ConfigType>) {
-        /***
-         This is the first thing called in the extension,
-         to create an instance of it.
-         The definition of InitialData is at @link https://github.com/CharHubAI/chub-extensions-ts/blob/main/src/types/initial.ts
-         Character at @link https://github.com/CharHubAI/chub-extensions-ts/blob/main/src/types/character.ts
-         User at @link https://github.com/CharHubAI/chub-extensions-ts/blob/main/src/types/user.ts
-         ***/
         super(data);
-        const {
-            characters,         // @type:  { [key: string]: Character }
-            users,                  // @type:  { [key: string]: User}
-            config,                                 //  @type:  ConfigType
-            messageState,                           //  @type:  MessageStateType
-            environment,                     // @type: Environment (which is a string)
-            initState,                             // @type: null | InitStateType
-            chatState                              // @type: null | ChatStateType
-        } = data;
-        this.myInternalState = messageState != null ? messageState : {'someKey': 'someValue'};
-        this.myInternalState['numUsers'] = Object.keys(users).length;
-        this.myInternalState['numChars'] = Object.keys(characters).length;
+        const {config, initState, messageState} = data;
+        this.config = config != null ? config : {startingHealth: 100, startingHunger: 0, maxDays: 365};
+        this.initState = initState != null ? initState['world'] : null;
+        this.myInternalState = messageState ?? {
+            currentScene: 'start',
+            inventory: [],
+            health: config?.startingHealth ?? 100,
+            hunger: config?.startingHunger ?? 0,
+            day: 1,
+            gameOver: false
+        };
     }
 
     async load(): Promise<Partial<LoadResponse<InitStateType, ChatStateType, MessageStateType>>> {
-        /***
-         This is called immediately after the constructor, in case there is some asynchronous code you need to
-         run on instantiation.
-         ***/
+        const world = await this.generateWorld();
+        this.initState = world;
         return {
-            /*** @type boolean @default null
-             @description The 'success' boolean returned should be false IFF (if and only if), some condition is met that means
-              the extension shouldn't be run at all and the iFrame can be closed/removed.
-              For example, if an extension displays expressions and no characters have an expression pack,
-              there is no reason to run the extension, so it would return false here. ***/
             success: true,
-            /*** @type null | string @description an error message to show
-             briefly at the top of the screen, if any. ***/
             error: null,
-            initState: null,
-            chatState: null,
-        };
-    }
-
-    async setState(state: MessageStateType): Promise<void> {
-        /***
-         This can be called at any time, typically after a jump to a different place in the chat tree
-         or a swipe. Note how neither InitState nor ChatState are given here. They are not for
-         state that is affected by swiping.
-         ***/
-        if (state != null) {
-            this.myInternalState = {...this.myInternalState, ...state};
-        }
-    }
-
-    async beforePrompt(userMessage: Message): Promise<Partial<ExtensionResponse<ChatStateType, MessageStateType>>> {
-        /***
-         This is called after someone presses 'send', but before anything is sent to the LLM.
-         ***/
-        const {
-            content,            /*** @type: string
-             @description Just the last message about to be sent. ***/
-            anonymizedId,       /*** @type: string
-             @description An anonymized ID that is unique to this individual
-              in this chat, but NOT their Chub ID. ***/
-            isBot             /*** @type: boolean
-             @description Whether this is itself from another bot, ex. in a group chat. ***/
-        } = userMessage;
-        return {
-            /*** @type null | string @description A string to add to the
-             end of the final prompt sent to the LLM,
-             but that isn't persisted. ***/
-            extensionMessage: null,
-            /*** @type MessageStateType | null @description the new state after the userMessage. ***/
-            messageState: {'someKey': this.myInternalState['someKey']},
-            /*** @type null | string @description If not null, the user's message itself is replaced
-             with this value, both in what's sent to the LLM and in the database. ***/
-            modifiedMessage: null,
-            /*** @type null | string @description A system message to append to the end of this message.
-             This is unique in that it shows up in the chat log and is sent to the LLM in subsequent messages,
-             but it's shown as coming from a system user and not any member of the chat. If you have things like
-             computed stat blocks that you want to show in the log, but don't want the LLM to start trying to
-             mimic/output them, they belong here. ***/
-            systemMessage: null,
-            /*** @type null | string @description an error message to show
-             briefly at the top of the screen, if any. ***/
-            error: null,
-            chatState: null,
-        };
-    }
-
-    async afterResponse(botMessage: Message): Promise<Partial<ExtensionResponse<ChatStateType, MessageStateType>>> {
-        /***
-         This is called immediately after a response from the LLM.
-         ***/
-        const {
-            content,            /*** @type: string
-             @description The LLM's response. ***/
-            anonymizedId,       /*** @type: string
-             @description An anonymized ID that is unique to this individual
-              in this chat, but NOT their Chub ID. ***/
-            isBot             /*** @type: boolean
-             @description Whether this is from a bot, conceivably always true. ***/
-        } = botMessage;
-        return {
-            /*** @type null | string @description A string to add to the
-             end of the final prompt sent to the LLM,
-             but that isn't persisted. ***/
-            extensionMessage: null,
-            /*** @type MessageStateType | null @description the new state after the botMessage. ***/
-            messageState: {'someKey': this.myInternalState['someKey']},
-            /*** @type null | string @description If not null, the bot's response itself is replaced
-             with this value, both in what's sent to the LLM subsequently and in the database. ***/
-            modifiedMessage: null,
-            /*** @type null | string @description an error message to show
-             briefly at the top of the screen, if any. ***/
-            error: null,
-            systemMessage: null,
+            initState: {world},
             chatState: null
         };
     }
 
-
-    render(): ReactElement {
-        /***
-         There should be no "work" done here. Just returning the React element to display.
-         If you're unfamiliar with React and prefer video, I've heard good things about
-         @link https://scrimba.com/learn/learnreact but haven't personally watched/used it.
-
-         For creating 3D and game components, react-three-fiber
-           @link https://docs.pmnd.rs/react-three-fiber/getting-started/introduction
-           and the associated ecosystem of libraries are quite good and intuitive.
-
-         Cuberun is a good example of a game built with them.
-           @link https://github.com/akarlsten/cuberun (Source)
-           @link https://cuberun.adamkarlsten.com/ (Demo)
-         ***/
-        return <div style={{
-            width: '100vw',
-            height: '100vh',
-            display: 'grid',
-            alignItems: 'stretch'
-        }}>
-            <div>Hello World! I'm an empty extension! With {this.myInternalState['someKey']}!</div>
-            <div>There is/are/were {this.myInternalState['numChars']} character(s)
-                and {this.myInternalState['numUsers']} human(s) here.
-            </div>
-        </div>;
+    async setState(state: MessageStateType): Promise<void> {
+        this.myInternalState = {...this.myInternalState, ...state};
     }
 
+    async beforePrompt(userMessage: Message): Promise<Partial<ExtensionResponse<ChatStateType, MessageStateType>>> {
+        let {content} = userMessage;
+        content = content.toLowerCase();
+
+        let modifiedMessage = null;
+        let systemMessage = null;
+
+        if (this.myInternalState.gameOver) {
+            if (content === 'restart') {
+                this.myInternalState = {
+                    currentScene: 'start',
+                    inventory: [],
+                    health: this.config.startingHealth,
+                    hunger: this.config.startingHunger,
+                    day: 1,
+                    gameOver: false
+                };
+                modifiedMessage = "Game restarted. You wake up in the forest clearing once again.";
+            } else {
+                systemMessage = "The game has ended. Type 'restart' to play again.";
+            }
+        } else {
+            if (content.startsWith('go ')) {
+                const nextScene = content.slice(3);
+                await this.handleGoCommand(nextScene);
+            } else if (content.startsWith('take ')) {
+                const item = content.slice(5);
+                await this.handleTakeCommand(item);
+            } else if (content.startsWith('use ')) {
+                const item = content.slice(4);
+                await this.handleUseCommand(item);
+            } else if (content === 'fight') {
+                await this.handleFightCommand();
+            }
+
+            await this.applyHungerDamage();
+            await this.checkGameOver();
+        }
+
+        systemMessage = `${systemMessage ?? ''}\n\n${await this.getSceneInfo()}`;
+
+        return {
+            extensionMessage: null,
+            messageState: this.myInternalState,
+            modifiedMessage,
+            systemMessage,
+            error: null,
+            chatState: null
+        };
+    }
+
+    async afterResponse(botMessage: Message): Promise<Partial<ExtensionResponse<ChatStateType, MessageStateType>>> {
+        let actions = [];
+        if(this.myInternalState.gameOver) {
+            actions.push('restart');
+        }
+        this.initState![this.myInternalState.currentScene].connectedScenes.forEach(scene => actions.push(`go ${scene}`));
+
+        const currentScene = this.initState![this.myInternalState.currentScene];
+        currentScene.items.forEach(item => actions.push(`take ${item}`));
+        const currentEnemies = this.initState![this.myInternalState.currentScene].enemies;
+        if (currentEnemies.length > 0) {
+            actions.push('fight');
+        }
+        this.myInternalState.inventory.forEach(item => actions.push(`use ${item}`));
+        let systemMessage = "```\nAvailable Commands:\n";
+        systemMessage += `${actions.join(', ')}\n`;
+        systemMessage += "```";
+        return {
+            extensionMessage: null,
+            messageState: this.myInternalState,
+            modifiedMessage: null,
+            error: null,
+            systemMessage,
+            chatState: null
+        };
+    }
+
+    async generateWorld(): Promise<InitStateType['world']> {
+        const world: InitStateType['world'] = {
+            start: {
+                description: "You find yourself in a mysterious forest clearing. Paths lead north and east.",
+                imagePrompt: "Mysterious fantasy forest clearing, path leading north and east, misty atmosphere",
+                connectedScenes: ['forest_path', 'river'],
+                items: ['stick'],
+                enemies: [],
+                puzzles: {}
+            },
+            forest_path: {
+                description: "The forest path winds through dense trees. You spot something shiny on the ground.",
+                imagePrompt: "Dense fantasy forest, winding path, shiny object on the ground",
+                connectedScenes: ['start', 'forest_glade'],
+                items: ['silver_key'],
+                enemies: ['goblin'],
+                puzzles: {}
+            },
+            river: {
+                description: "A peaceful river flows past. A small boat is tied to the shore.",
+                imagePrompt: "Calm river flowing through forest, small wooden boat tied to shore",
+                connectedScenes: ['start', 'boat_ride'],
+                items: ['fishing_pole'],
+                enemies: [],
+                puzzles: {}
+            },
+            forest_glade: {
+                description: "You enter a sunny forest glade. There is an old stone well in the center.",
+                imagePrompt: "Sunny forest clearing, ancient stone well in the center",
+                connectedScenes: ['forest_path'],
+                items: [],
+                enemies: [],
+                puzzles: {
+                    well: {
+                        description: "The well is locked. It requires a silver key.",
+                        requiredItem: "silver_key",
+                        rewardScene: "well_bottom"
+                    }
+                }
+            },
+            well_bottom: {
+                description: "You descend to the bottom of the well. There is an old chest filled with treasure!",
+                imagePrompt: "Dark stone well bottom, ancient treasure chest overflowing with gold coins and jewels",
+                connectedScenes: ['forest_glade'],
+                items: [],
+                enemies: [],
+                puzzles: {}
+            },
+            boat_ride: {
+                description: "You drift down the river in the boat, enjoying the scenery.",
+                imagePrompt: "Peaceful boat ride down fantasy river, lush forest on the banks",
+                connectedScenes: ['river', 'river_end'],
+                items: [],
+                enemies: [],
+                puzzles: {}
+            },
+            river_end: {
+                description: "The river carries you to a distant shore. An ancient ruin stands before you.",
+                imagePrompt: "Crumbling stone ruins on the shore of a river in a fantasy setting, mysterious atmosphere",
+                connectedScenes: ['boat_ride', 'ruin_entrance'],
+                items: [],
+                enemies: ['skeleton'],
+                puzzles: {}
+            },
+            ruin_entrance: {
+                description: "You stand before the entrance to the ruins. A sturdy metal gate blocks your path.",
+                imagePrompt: "Heavy, locked metal gate in front of ancient stone ruins",
+                connectedScenes: ['river_end'],
+                items: [],
+                enemies: [],
+                puzzles: {
+                    gate: {
+                        description: "The gate is locked. It looks like it could be opened with some kind of key.",
+                        requiredItem: "gold_key",
+                        rewardScene: "ruin_depths"
+                    }
+                }
+            },
+            ruin_depths: {
+                description: "You venture deep into the ancient ruins and discover the lost treasure of the ancients!",
+                imagePrompt: "Sunlight streaming into ancient ruins onto piles of gold treasure and artifacts",
+                connectedScenes: ['ruin_entrance'],
+                items: [],
+                enemies: ['ancient_guardian'],
+                puzzles: {}
+            }
+        };
+
+        for (const scene in world) {
+            const resp = await this.generator.makeImage({prompt: world[scene].imagePrompt});
+            if (resp?.url) world[scene].imagePrompt = resp.url;
+        }
+
+        return world;
+    }
+
+    async handleGoCommand(nextScene: string) {
+        if (this.initState![this.myInternalState.currentScene].connectedScenes.includes(nextScene)) {
+            this.myInternalState.currentScene = nextScene;
+            this.myInternalState.day++;
+        } else {
+            return `You can't go to ${nextScene} from here.`;
+        }
+    }
+
+    async handleTakeCommand(item: string) {
+        const currentScene = this.initState![this.myInternalState.currentScene];
+
+        if (currentScene.items.includes(item)) {
+            this.myInternalState.inventory.push(item);
+            currentScene.items = currentScene.items.filter(i => i !== item);
+            return `You take the ${item}.`;
+        } else {
+            return `There is no ${item} here to take.`;
+        }
+    }
+
+    async handleUseCommand(item: string) {
+        const currentPuzzles = this.initState![this.myInternalState.currentScene].puzzles;
+
+        for (const puzzle in currentPuzzles) {
+            if (currentPuzzles[puzzle].requiredItem === item && this.myInternalState.inventory.includes(item)) {
+                this.myInternalState.inventory = this.myInternalState.inventory.filter(i => i !== item);
+                this.myInternalState.currentScene = currentPuzzles[puzzle].rewardScene;
+                delete this.initState![this.myInternalState.currentScene].puzzles[puzzle];
+                return `You use the ${item} and solve the ${puzzle}!`;
+            }
+        }
+
+        return `You can't use the ${item} here.`;
+    }
+
+    async handleFightCommand() {
+        const currentEnemies = this.initState![this.myInternalState.currentScene].enemies;
+
+        if (currentEnemies.length > 0) {
+            const enemy = currentEnemies[0];
+            this.initState![this.myInternalState.currentScene].enemies.shift();
+
+            const damage = Math.floor(Math.random() * 20) + 10;
+            this.myInternalState.health -= damage;
+
+            if (this.myInternalState.inventory.includes('sword')) {
+                return `You fight the ${enemy} with your sword. You take ${damage} damage and defeat it!`;
+            } else {
+                return `You fight the ${enemy} with your bare hands. You take ${damage} damage and defeat it, but you're hurt.`;
+            }
+        } else {
+            return "There's nothing to fight here.";
+        }
+    }
+
+    async applyHungerDamage() {
+        this.myInternalState.hunger += 10;
+
+        if (this.myInternalState.hunger >= 100) {
+            this.myInternalState.health -= 20;
+            this.myInternalState.hunger = 0;
+        }
+    }
+
+    async checkGameOver() {
+        if (this.myInternalState.health <= 0) {
+            this.myInternalState.gameOver = true;
+            return "You succumb to your wounds. Game over.";
+        }
+
+        if (this.myInternalState.day > this.config.maxDays) {
+            this.myInternalState.gameOver = true;
+            return "You fail to find the treasure in time. Game over.";
+        }
+
+        if (this.myInternalState.currentScene === 'ruin_depths') {
+            this.myInternalState.gameOver = true;
+            const song: ImagineResponse | null = await this.generator.makeMusic({
+                prompt: "Triumphant orchestral fanfare",  lyrics: null, tags: ['orchestral', 'fanfare'],
+                title: 'Ruin Depths', instrumental: true, lyrics_prompt: null,
+            });
+            this.myInternalState.song = song?.url;
+            return "Congratulations, you found the ancient treasure! You win!";
+        }
+    }
+
+    async getSceneInfo() {
+        const scene = this.initState![this.myInternalState.currentScene];
+
+        return `Day ${this.myInternalState.day}\nHealth: ${this.myInternalState.health}\nHunger: ${this.myInternalState.hunger}\nCurrent Scene: ${scene.description}\nAvailable Paths: ${scene.connectedScenes.join(', ')}\nItems Here: ${scene.items.join(', ')}\nEnemies Here: ${scene.enemies.join(', ')}\nInventory: ${this.myInternalState.inventory.join(', ')}\nPuzzles:\n${Object.values(scene.puzzles).map(p => - `${p.description}`).join('\n')}`;
+    }
+
+    render(): ReactElement {
+        if(!this.initState) {
+            return <></>
+        }
+        return <>
+            <div style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                position: 'absolute',
+                flexDirection: 'column',
+                justifyContent: 'space-between'
+            }}>
+
+                {this.myInternalState.gameOver ? (
+                    <div>Game Over. Type "restart" to play again.</div>
+                ) : (
+                    <div>
+                        <h2>Day {this.myInternalState.day} - {this.initState![this.myInternalState.currentScene].description}</h2>
+                        <p>Available
+                            Paths: {this.initState![this.myInternalState.currentScene].connectedScenes.join(', ')}</p>
+                        <p>Items Here: {this.initState![this.myInternalState.currentScene].items.join(', ')}</p>
+                        <p>Enemies Here: {this.initState![this.myInternalState.currentScene].enemies.length == 0 ? 'None' : this.initState![this.myInternalState.currentScene].enemies.join(', ')}</p>
+                    </div>
+                )}
+                <div>
+                    <h3>Inventory</h3>
+                    <ul>
+                        {this.myInternalState.inventory.map(item => <li key={item}>{item}</li>)}
+                    </ul>
+                    <p>Health: {this.myInternalState.health}</p>
+                    <p>Hunger: {this.myInternalState.hunger}</p>
+                </div>
+                {this.myInternalState.song != null && <audio src={this.myInternalState.song}/>}
+            </div>
+            <img
+                src={this.initState![this.myInternalState.currentScene].imagePrompt}
+                alt="Scene"
+                style={{
+                    maxWidth: '100%', maxHeight: '50%', objectFit: 'contain',
+
+                    opacity: '30%'
+                }}
+            />
+        </>;
+    }
 }
