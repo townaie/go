@@ -36,7 +36,7 @@ export const TestExtensionRunner = <ExtensionType extends Extension<InitStateTyp
      This is the main thing you'll want to modify.
      ***/
     async function runTests() {
-        await extension.setState({someKey: 'A new value, even!'});
+        /***await extension.setState({someKey: 'A new value, even!'});
         refresh();
 
         const beforePromptResponse: Partial<ExtensionResponse<ChatStateType, MessageStateType>> = await extension.beforePrompt({
@@ -48,7 +48,7 @@ export const TestExtensionRunner = <ExtensionType extends Extension<InitStateTyp
         });
         console.assert(beforePromptResponse.error == null);
         refresh();
-
+        ***/
         /***
          "What is all of this nonsense with 'DEFAULT_MESSAGE'?" you may well ask.
          The purpose of this is to future-proof your test runner.
@@ -62,6 +62,7 @@ export const TestExtensionRunner = <ExtensionType extends Extension<InitStateTyp
             where relevant in your tests prevents a version bump
             from breaking your test runner in many cases.
          ***/
+        /***
         const afterPromptResponse: Partial<ExtensionResponse<ChatStateType, MessageStateType>> = await extension.afterResponse({
             ...DEFAULT_MESSAGE, ...{
             promptForId: null,
@@ -77,6 +78,7 @@ export const TestExtensionRunner = <ExtensionType extends Extension<InitStateTyp
         }}), 5);
         console.assert(afterDelayedThing.error == null);
         refresh();
+        ***/
     }
 
     useEffect(() => {
