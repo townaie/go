@@ -37,11 +37,11 @@ export class ChubExtension extends Extension<InitStateType, ChatStateType, Messa
         const {config, initState, messageState} = data;
         this.config = config != null ? config : {startingHealth: 100, startingHunger: 0, maxDays: 365};
         this.initState = initState != null ? initState['world'] : null;
-        this.myInternalState = messageState ?? {
+        this.myInternalState = messageState != null ? messageState : {
             currentScene: 'start',
             inventory: [],
-            health: config?.startingHealth ?? 100,
-            hunger: config?.startingHunger ?? 0,
+            health: this.config.startingHealth != null ? this.config.startingHealth : 100,
+            hunger: this.config.startingHunger != null ? this.config.startingHunger : 0,
             day: 1,
             gameOver: false
         };
